@@ -1,0 +1,630 @@
+================================================================================
+FILE: .\app.py
+================================================================================
+
+import streamlit as st
+import numpy as np
+import librosa
+import tensorflow as tf
+import sounddevice as sd
+import scipy.io.wavfile as wav
+
+# Load model
+model = tf.keras.models.load_model("cnn_model_best.keras")
+
+st.title("🎤 Real-Time Voice Fatigue Detection")
+
+# Record button
+if st.button("🎙️ Start Recording (3 sec)"):
+    
+    duration = 3
+    fs = 22050
+
+    st.info("Recording... बोलो कुछ 🎤")
+
+    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1)
+    sd.wait()
+
+    wav.write("temp.wav", fs, recording)
+
+    st.success("Recording complete ✅")
+
+    # -------------------------------
+    # FEATURE EXTRACTION (FIXED)
+    # -------------------------------
+    y, sr = librosa.load("temp.wav", sr=22050)
+
+    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
+
+    # 👇 MODEL SE AUTO SHAPE LO (IMPORTANT)
+    max_len = model.input_shape[2]
+
+    # Padding / Trimming
+    if mfcc.shape[1] < max_len:
+        pad_width = max_len - mfcc.shape[1]
+        mfcc = np.pad(mfcc, ((0, 0), (0, pad_width)), mode='constant')
+    else:
+        mfcc = mfcc[:, :max_len]
+
+    # Final shape
+    features = mfcc.reshape(1, 40, max_len, 1)
+
+    # -------------------------------
+    # PREDICTION
+    # -------------------------------
+    prediction = model.predict(features)
+
+    score = float(prediction[0][0])
+
+    st.write("Prediction Score:", score)
+
+    if score > 0.6:
+        st.error("😵 High Fatigue")
+    elif score > 0.4:
+        st.warning("😐 Medium Fatigue")
+    else:
+        st.success("😄 Low Fatigue")
+
+
+
+================================================================================
+FILE: .\src\export codebase.py
+================================================================================
+
+import os
+
+OUTPUT_FILE = "codebase_dump.txt"
+
+# folders to ignore (VERY IMPORTANT)
+IGNORE_DIRS = {
+    "venv", "__pycache__", ".git",
+    "data", "csv_data",
+    "faiss_index", "demo_faiss_index",
+    "assets", "docs", "examples",
+    ".agent", ".agents", ".gemini", ".gsd",
+    "nl2sql"
+}
+
+def should_ignore(path):
+    return any(ignored in path for ignored in IGNORE_DIRS)
+
+with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
+    for root, dirs, files in os.walk("."):
+        # remove ignored dirs
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+
+        for file in files:
+            if file.endswith(".py"):
+                file_path = os.path.join(root, file)
+
+                if should_ignore(file_path):
+                    continue
+
+                out.write("="*80 + "\n")
+                out.write(f"FILE: {file_path}\n")
+                out.write("="*80 + "\n\n")
+
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        out.write(f.read())
+                except Exception as e:
+                    out.write(f"[ERROR READING FILE: {e}]")
+
+                out.write("\n\n\n")
+
+print(f"✅ Done! Output saved in {OUTPUT_FILE}")
+
+
+================================================================================
+FILE: .\src\model\fuzzy_logic.py
+================================================================================
+
+def get_fatigue_level(score):
+
+    if score < 0.3:
+        return "Fresh 😊"
+
+    elif score < 0.5:
+        return "Slightly Tired 😐"
+
+    elif score < 0.7:
+        return "Moderately Fatigued 😓"
+
+    else:
+        return "Exhausted 😴"
+
+
+# 🔹 Test
+if __name__ == "__main__":
+    test_scores = [0.2, 0.4, 0.6, 0.9]
+
+    for s in test_scores:
+        print(f"Score: {s} → {get_fatigue_level(s)}")
+
+
+
+================================================================================
+FILE: .\src\model\predict.py
+================================================================================
+
+import numpy as np
+import librosa
+import tensorflow as tf
+import os
+
+# 🔹 Load trained model
+model = tf.keras.models.load_model("cnn_model.h5")
+
+# 🔹 Fuzzy Logic function
+def get_fatigue_level(score):
+
+    if score < 0.3:
+        return "Fresh 😊"
+
+    elif score < 0.5:
+        return "Slightly Tired 😐"
+
+    elif score < 0.7:
+        return "Moderately Fatigued 😓"
+
+    else:
+        return "Exhausted 😴"
+
+
+# 🔹 Predict function
+def predict_audio(file_path):
+
+    print("Processing:", file_path)
+
+    # 🔹 Load audio
+    y, sr = librosa.load(file_path, sr=None)
+
+    # 🔹 Create spectrogram
+    spec = librosa.feature.melspectrogram(y=y, sr=sr)
+    spec_db = librosa.power_to_db(spec, ref=np.max)
+
+    # 🔹 Resize to 128x128
+    spec_db = spec_db[:128, :128]
+    spec_db = np.pad(spec_db, ((0, max(0, 128 - spec_db.shape[0])),
+                               (0, max(0, 128 - spec_db.shape[1]))))
+
+    # 🔹 Reshape for CNN
+    spec_db = spec_db[np.newaxis, ..., np.newaxis]
+
+    # 🔹 Predict
+    score = model.predict(spec_db)[0][0]
+
+    print(f"\n🎯 Fatigue Score: {score:.2f}")
+    print("🧠 Result:", get_fatigue_level(score))
+
+
+# 🔹 TEST (अपना audio path डालो)
+if __name__ == "__main__":
+
+    test_audio = r"C:\Users\JT Lappy\Desktop\phase2\voice_fatigue_detection\data\raw\english\ravdess\Actor_07\03-01-04-02-02-01-07.wav"
+
+    predict_audio(test_audio)
+
+
+
+================================================================================
+FILE: .\src\model\train_cnn.py
+================================================================================
+
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import (Conv2D, MaxPooling2D, Flatten,
+                                     Dense, Dropout, BatchNormalization,
+                                     Input)
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.optimizers import Adam
+from sklearn.model_selection import train_test_split
+from sklearn.utils import class_weight
+
+# 🔹 Load data
+X = np.load("data/processed/X.npy")
+y = np.load("data/processed/y.npy")
+
+print("Shape:", X.shape)
+
+# 🔹 Fix NaN / Inf (safety)
+X = np.nan_to_num(X)
+
+# 🔹 Normalize (IMPORTANT FIX)
+X = X.astype("float32")
+X = (X - np.min(X)) / (np.max(X) - np.min(X) + 1e-8)
+
+# 🔹 Train-test split
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y,
+    test_size=0.2,
+    random_state=42,
+    stratify=y
+)
+
+# 🔹 Class weights
+weights = class_weight.compute_class_weight(
+    class_weight='balanced',
+    classes=np.unique(y),
+    y=y
+)
+class_weights = dict(enumerate(weights))
+print("Class Weights:", class_weights)
+
+# 🔹 Data Augmentation (VERY IMPORTANT 🔥)
+data_augmentation = tf.keras.Sequential([
+    tf.keras.layers.RandomFlip("horizontal"),
+    tf.keras.layers.RandomRotation(0.1),
+    tf.keras.layers.RandomZoom(0.1)
+])
+
+# 🔹 CNN Model (Improved)
+model = Sequential([
+    Input(shape=(128, 128, 1)),
+
+    data_augmentation,
+
+    Conv2D(32, (3,3), padding='same', activation='relu'),
+    BatchNormalization(),
+    MaxPooling2D(),
+
+    Conv2D(64, (3,3), padding='same', activation='relu'),
+    BatchNormalization(),
+    MaxPooling2D(),
+
+    Conv2D(128, (3,3), padding='same', activation='relu'),
+    BatchNormalization(),
+    MaxPooling2D(),
+
+    Conv2D(256, (3,3), padding='same', activation='relu'),
+    BatchNormalization(),
+    MaxPooling2D(),
+
+    Flatten(),
+
+    Dense(256, activation='relu'),
+    Dropout(0.5),
+
+    Dense(64, activation='relu'),
+    Dropout(0.3),
+
+    Dense(1, activation='sigmoid')
+])
+
+# 🔹 Compile
+model.compile(
+    optimizer=Adam(learning_rate=0.0003),
+    loss='binary_crossentropy',
+    metrics=[
+        'accuracy',
+        tf.keras.metrics.Precision(),
+        tf.keras.metrics.Recall()
+    ]
+)
+
+# 🔹 Callbacks
+early_stop = EarlyStopping(
+    monitor='val_loss',
+    patience=7,
+    restore_best_weights=True
+)
+
+reduce_lr = ReduceLROnPlateau(
+    monitor='val_loss',
+    factor=0.3,
+    patience=3,
+    min_lr=1e-6
+)
+
+# 🔹 Train
+history = model.fit(
+    X_train, y_train,
+    epochs=40,
+    batch_size=16,
+    validation_split=0.2,
+    class_weight=class_weights,
+    callbacks=[early_stop, reduce_lr],
+    verbose=1
+)
+
+# 🔹 Evaluate
+loss, acc, precision, recall = model.evaluate(X_test, y_test)
+
+print("\n✅ Test Accuracy:", acc)
+print("🎯 Precision:", precision)
+print("🎯 Recall:", recall)
+
+# 🔹 Save model
+model.save("cnn_model_best.keras")
+print("🔥 Model saved as cnn_model_best.keras")
+
+
+
+================================================================================
+FILE: .\src\model\train_model.py
+================================================================================
+
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+# 🔹 Load data
+data_path = r"C:\Users\JT Lappy\Desktop\phase2\voice_fatigue_detection\data\processed\features_labeled.csv"
+df = pd.read_csv(data_path)
+
+print("Columns:", df.columns)
+print("Labels:", df["label"].unique())
+
+# 🔹 Remove file column
+df = df.drop(columns=["file"])
+
+# 🔹 Features & Labels
+X = df.drop(columns=["label"])
+y = df["label"]
+
+# 🔹 Split (IMPORTANT)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y,
+    test_size=0.2,
+    random_state=42,
+    stratify=y
+)
+
+# 🔹 Model (Balanced + Stable)
+model = RandomForestClassifier(
+    n_estimators=200,
+    max_depth=None,
+    class_weight="balanced",   # ⭐ FIX (automatic balance)
+    random_state=42
+)
+
+# 🔹 Train
+model.fit(X_train, y_train)
+
+# 🔹 Predict probabilities
+y_prob = model.predict_proba(X_test)[:, 1]
+
+# 🔹 Threshold tuning
+threshold = 0.5   # ⭐ CHANGE THIS (0.4 / 0.5 / 0.6 try)
+
+y_pred = (y_prob > threshold).astype(int)
+
+# 🔹 Results
+print("\n✅ Accuracy:", accuracy_score(y_test, y_pred))
+print("\n📊 Classification Report:\n", classification_report(y_test, y_pred))
+print("\n📉 Confusion Matrix:\n", confusion_matrix(y_test, y_pred))
+
+
+
+================================================================================
+FILE: .\src\preprocessing\add_labels.py
+================================================================================
+
+import pandas as pd
+import os
+
+# 🔹 Input CSV
+input_csv = r"C:\Users\JT Lappy\Desktop\phase2\voice_fatigue_detection\data\processed\features.csv"
+
+# 🔹 Output CSV
+output_csv = r"C:\Users\JT Lappy\Desktop\phase2\voice_fatigue_detection\data\processed\features_labeled.csv"
+
+df = pd.read_csv(input_csv)
+
+def get_label(file_path):
+    filename = os.path.basename(file_path).lower()
+
+    # 🔹 RAVDESS
+    if "ravdess" in file_path.lower():
+        parts = filename.split("-")
+
+        if len(parts) > 2:
+            emotion_code = parts[2]
+
+            if emotion_code in ["04", "05", "06"]:   # sad, angry, fear
+                return 1   # fatigue
+            else:
+                return 0   # non-fatigue
+
+    # 🔹 TESS
+    if "tess" in file_path.lower():
+        if "sad" in filename or "fear" in filename or "angry" in filename:
+            return 1
+        elif "happy" in filename or "neutral" in filename:
+            return 0
+
+    return None
+
+# 🔹 Apply labels
+df["label"] = df["file"].apply(get_label)
+
+# 🔹 Remove unlabeled (OpenSLR remove)
+df = df[df["label"].notnull()]
+
+# 🔹 Convert to int
+df["label"] = df["label"].astype(int)
+
+# 🔹 Save
+df.to_csv(output_csv, index=False)
+
+print("✅ DONE! Labeled dataset ready")
+
+# 🔹 Check balance
+print("\n📊 Label Distribution:")
+print(df["label"].value_counts())
+
+
+
+================================================================================
+FILE: .\src\preprocessing\convert_audio.py
+================================================================================
+
+import os
+import glob
+from pydub import AudioSegment
+
+# 🔹 Input folder (mp3 files)
+input_folder = r"C:\Users\JT Lappy\Desktop\phase2\voice_fatigue_detection\data\raw\hindi\openslr"
+
+# 🔹 Output folder (wav files)
+output_folder = r"C:\Users\JT Lappy\Desktop\phase2\voice_fatigue_detection\data\processed\hindi\openslr"
+
+os.makedirs(output_folder, exist_ok=True)
+
+# 🔹 Find all mp3 files
+mp3_files = glob.glob(os.path.join(input_folder, "**", "*.mp3"), recursive=True)
+
+print(f"Total MP3 files: {len(mp3_files)}\n")
+
+# 🔹 Convert
+for file_path in mp3_files:
+    try:
+        print("Converting:", file_path)
+
+        audio = AudioSegment.from_mp3(file_path)
+
+        file_name = os.path.basename(file_path).replace(".mp3", ".wav")
+        save_path = os.path.join(output_folder, file_name)
+
+        audio.export(save_path, format="wav")
+
+    except Exception as e:
+        print("Error:", file_path, e)
+
+print("\n✅ DONE! All files converted to WAV")
+
+
+
+================================================================================
+FILE: .\src\preprocessing\create_spectrograms.py
+================================================================================
+
+import os
+import numpy as np
+import pandas as pd
+import librosa
+
+# 🔹 Load labeled CSV
+csv_path = r"data/processed/features_labeled.csv"
+df = pd.read_csv(csv_path)
+
+X = []
+y = []
+
+print("Total files:", len(df))
+
+for i, row in df.iterrows():
+    file_path = row["file"]
+    label = row["label"]
+
+    try:
+        # 🔹 Load audio
+        audio, sr = librosa.load(file_path, sr=22050)
+
+        # 🔹 Create spectrogram
+        mel = librosa.feature.melspectrogram(y=audio, sr=sr)
+        mel_db = librosa.power_to_db(mel, ref=np.max)
+
+        # 🔹 Resize to 128x128
+        mel_db = librosa.util.fix_length(mel_db, size=128, axis=1)
+        mel_db = mel_db[:128, :]
+
+        # 🔹 Normalize
+        max_val = np.max(mel_db)
+
+        if max_val == 0:
+            mel_db = np.zeros_like(mel_db)
+        else:
+            mel_db = mel_db / max_val
+
+        if np.max(mel_db) != 0:
+            mel_db = mel_db / np.max(mel_db)
+        else:
+            mel_db = mel_db
+                
+
+        # 🔹 Add channel
+        mel_db = mel_db.reshape(128, 128, 1)
+
+        X.append(mel_db)
+        y.append(label)
+
+        if i % 100 == 0:
+            print(f"Processed {i} files")
+
+    except Exception as e:
+        print("Error:", file_path, e)
+
+# 🔹 Convert to numpy
+X = np.array(X)
+y = np.array(y)
+
+print("Final Shape:", X.shape, y.shape)
+
+# 🔹 Save
+os.makedirs("data/processed", exist_ok=True)
+
+np.save("data/processed/X.npy", X)
+np.save("data/processed/y.npy", y)
+
+print("✅ DONE! X.npy & y.npy saved")
+
+
+
+================================================================================
+FILE: .\src\preprocessing\extract_features.py
+================================================================================
+
+import os
+import glob
+import librosa
+import numpy as np
+import pandas as pd
+
+# 🔹 RAW folder
+input_folder = r"C:\Users\JT Lappy\Desktop\phase2\voice_fatigue_detection\data\raw"
+
+# 🔹 OUTPUT CSV
+output_csv = r"C:\Users\JT Lappy\Desktop\phase2\voice_fatigue_detection\data\processed\features.csv"
+
+# 🔹 Find all WAV files
+audio_files = glob.glob(os.path.join(input_folder, "**", "*.wav"), recursive=True)
+
+print(f"✅ Total WAV files found: {len(audio_files)}\n")
+
+data = []
+
+for file in audio_files:
+    try:
+        print("Processing:", file)
+
+        y, sr = librosa.load(file, sr=None)
+
+            # MFCC (13 values)
+        mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+        mfccs_mean = np.mean(mfccs, axis=1)
+
+        # Other features
+        zcr = np.mean(librosa.feature.zero_crossing_rate(y))
+        rms = np.mean(librosa.feature.rms(y=y))
+
+        # Store ALL features
+        data.append([file, *mfccs_mean, zcr, rms])
+
+
+    except Exception as e:
+        print("❌ Error:", file, e)
+
+columns = ["file"] + [f"mfcc_{i}" for i in range(13)] + ["zcr", "rms"]
+df = pd.DataFrame(data, columns=columns)
+
+os.makedirs(os.path.dirname(output_csv), exist_ok=True)
+
+df.to_csv(output_csv, index=False)
+
+print("\n✅ DONE! features.csv created")
+
+
+
